@@ -137,3 +137,33 @@ If you find our work useful in your research or applications, please consider ci
       primaryClass={cs.AI},
       url={https://arxiv.org/abs/2506.00073}, 
 }
+```
+
+---
+
+## 🛠️ Quickstart (CLI — developer toolkit)
+
+A2A-CMA ships with an `a2a-cma`-style CLI that lets you stress-test a shopping
+agent against the v1→v3 safety scenarios in one command.
+
+```bash
+# 1. List the scenarios available.
+python -m a2a_cma_cli list-scenarios
+
+# 2. Run the v1.5 strict-iPhone scenario three times against gpt-4o-mini.
+python -m a2a_cma_cli run \
+    --scenario bfm_iphone_strict_gift \
+    --buyer-model gpt-4o-mini \
+    --seller-model gpt-4o-mini \
+    --repeats 3 \
+    --output runs/iphone
+
+# 3. Run every active scenario.
+python -m a2a_cma_cli run-all --buyer-model gpt-4o-mini --seller-model gpt-4o-mini --output runs/all
+
+# 4. Aggregate anomalies + (optional) user-regret verdicts.
+python -m a2a_cma_cli report runs/all --judge-model gpt-4o-mini
+```
+
+See `docs/CONCEPT.md` for what each scenario / anomaly means and
+`docs/RELATED_WORK.md` for the underlying citations.
