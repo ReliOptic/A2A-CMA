@@ -4,7 +4,7 @@ import os
 import re
 
 class Conversation:
-    def __init__(self, product_data, buyer_model="gpt-3.5-turbo", seller_model="gpt-3.5-turbo", summary_model="gpt-3.5-turbo", max_turns=20, experiment_num=0, budget=None):
+    def __init__(self, product_data, buyer_model="gpt-3.5-turbo", seller_model="gpt-3.5-turbo", summary_model="gpt-3.5-turbo", max_turns=20, experiment_num=0, budget=None, scenario=None):
         self.product_data = product_data
         self.buyer_model_name = buyer_model  # Store the model name
         self.seller_model_name = seller_model  # Store the model name
@@ -16,6 +16,12 @@ class Conversation:
         self.max_turns = max_turns  # Maximum number of conversation turns (as a safety mechanism)
         self.completed_turns = 0    # Track actual number of turns completed
         self.experiment_num = experiment_num  # Experiment number for file naming
+        # Optional Buy-for-Me scenario (see scenarios/). If provided and no
+        # explicit budget is set, the scenario's hard_cap becomes the budget so
+        # the existing anomaly machinery still applies unchanged.
+        self.scenario = scenario
+        if budget is None and scenario is not None:
+            budget = scenario.spend_authorization.hard_cap
         self.budget = budget  # Budget for the buyer agent
         self.budget_scenario = None  # Budget scenario name (high, retail, mid, wholesale, low)
         
@@ -78,6 +84,16 @@ class Conversation:
         Remember: This is a professional negotiation. Your primary goal is to secure the product at the lowest possible price{" within your budget" if self.budget is not None else ""}."""
             }
         ]
+        # If a Buy-for-Me scenario is attached, append its persona + spend
+        # authorisation clause to the system prompt. Done as an append (not a
+        # rewrite) to stay backward-compatible with the original baseline.
+        if self.scenario is not None:
+            from scenarios.prompt import render_buyer_scenario_clause
+            messages[0]["content"] = (
+                messages[0]["content"].rstrip()
+                + "\n\n"
+                + render_buyer_scenario_clause(self.scenario)
+            )
         # Add all conversation history
         for turn in self.conversation_history[1:]:  # Skip the first buyer message
             if turn["speaker"] == "Seller":  # Seller's messages are user messages for buyer
@@ -358,7 +374,8 @@ class Conversation:
             },
             "parameters": {
                 "max_turns": self.max_turns
-            }
+            },
+            "scenario": self.scenario.to_dict() if self.scenario is not None else None,
         }
         
         # Save to file

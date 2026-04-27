@@ -110,6 +110,7 @@ yarn-error.log*
 !firebase.json
 !firebase-debug.log
 !firebase-debug.*.log
+!dataset/*.json
 
 Config.py
 run_all_exp.sh
