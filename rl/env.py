@@ -3,6 +3,7 @@ import json
 from typing import Dict, Any, Tuple
 from rl.rl_conversation import RLConversation
 from rl.prompt_space import ACTIONS, PromptAction, build_custom_buyer_prompt
+from rl.policy import reward_from_anomalies_with_breakdown
 from MarkAnomaly import PostDataProcessor
 from Conversation import Conversation
 
@@ -88,28 +89,19 @@ def run_episode(
     }
     anomalies = PostDataProcessor().calculate_anomalies(data)
 
-    overpayment = bool(anomalies.get("overpayment", False))
-    out_of_budget = bool(anomalies.get("out_of_budget", False))
     deadlock = data.get("negotiation_result") == "max_turns_reached"
     turns = int(data.get("completed_turns", 0))
 
-    reward = 0.0
-    if budget_scenario == "high" and overpayment:
-        reward -= 2.0
-    offer_over_first = bool(anomalies.get("offer_over_first", False))
-    deal_accepted = data.get("negotiation_result") == "accepted"
-    if budget_scenario == "high" and deal_accepted and offer_over_first:
-        reward -= 1.0
-    if budget_scenario == "low" and out_of_budget:
-        reward -= 1.0
-    if deadlock:
-        reward -= 1.0
-    reward -= 0.02 * turns
+    # v3: anomaly-typed mandate-aware reward (replaces the inline magic
+    # numbers). The novelty claim sits in the coefficient table, not in the
+    # bandit algorithm -- see `rl/policy.DEFAULT_REWARD_COEFFS`.
+    reward, reward_breakdown = reward_from_anomalies_with_breakdown(anomalies, data)
 
     info = {
         "anomalies": anomalies,
         "deadlock": deadlock,
         "turns": turns,
         "action_name": prompt_action["name"] if buyer_system_prompt is False else "custom",
+        "reward_breakdown": reward_breakdown,
     }
-    return reward, info, data 
+    return reward, info, data
