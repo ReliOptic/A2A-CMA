@@ -4,7 +4,7 @@ import os
 import re
 
 class Conversation:
-    def __init__(self, product_data, buyer_model="gpt-3.5-turbo", seller_model="gpt-3.5-turbo", summary_model="gpt-3.5-turbo", max_turns=20, experiment_num=0, budget=None, scenario=None):
+    def __init__(self, product_data, buyer_model="gpt-3.5-turbo", seller_model="gpt-3.5-turbo", summary_model="gpt-3.5-turbo", max_turns=20, experiment_num=0, budget=None, scenario=None, gateway=None):
         self.product_data = product_data
         self.buyer_model_name = buyer_model  # Store the model name
         self.seller_model_name = seller_model  # Store the model name
@@ -40,7 +40,21 @@ class Conversation:
         self.negotiation_completed = False
         # Result of the negotiation (accepted, rejected, or None if not completed)
         self.negotiation_result = None
-        
+
+        # v1.5 payment-gateway hook. If a scenario is attached and no gateway
+        # was injected explicitly, auto-build one from the scenario's spend
+        # authorisation so existing entry points pick up the safety net for
+        # free. When neither is present the buyer behaves exactly as before.
+        if gateway is None and scenario is not None:
+            from payments import PaymentGateway, build_intent_mandate_from_scenario
+            gateway = PaymentGateway(build_intent_mandate_from_scenario(scenario))
+        self.gateway = gateway
+        # Most recent gateway decision (used for save_conversation + tests).
+        self.last_authorization = None
+        # Specific decline outcome name when the gateway intervenes; lets the
+        # anomaly layer distinguish "needs human" from "hard-cap breach".
+        self.gateway_decline_reason = None
+
     def format_buyer_prompt(self):
         """Format a prompt for the buyer agent."""
         # Format detailed product information including features
@@ -251,8 +265,7 @@ class Conversation:
         
         # Process the evaluation result
         if "ACCEPTANCE" in evaluation:
-            self.negotiation_completed = True
-            self.negotiation_result = "accepted"
+            self._finalize_acceptance()
             return True
         elif "REJECTION" in evaluation:
             self.negotiation_completed = True
@@ -261,6 +274,42 @@ class Conversation:
         else:
             # Continue negotiating
             return False
+
+    def _finalize_acceptance(self):
+        """Apply the gateway check (if any) before declaring an accepted deal.
+
+        Without a gateway the behaviour collapses to the original baseline
+        (`negotiation_result = "accepted"`). With a gateway, the buyer's
+        "yes" is treated as an *attempted settlement* that the payment layer
+        gets to approve, escalate, or block.
+        """
+        if self.gateway is None:
+            self.negotiation_completed = True
+            self.negotiation_result = "accepted"
+            return
+
+        from payments import AuthorizationOutcome
+        product_name = self.product_data.get("Product Name", "item")
+        line_items = [{
+            "name": product_name,
+            "unit_price": self.current_price_offer,
+            "qty": 1,
+        }]
+        decision = self.gateway.authorize(
+            amount=self.current_price_offer,
+            line_items=line_items,
+            category=self.product_data.get("Type"),
+        )
+        self.last_authorization = decision
+        self.negotiation_completed = True
+        if decision.outcome == AuthorizationOutcome.APPROVED:
+            self.negotiation_result = "accepted"
+        elif decision.outcome == AuthorizationOutcome.NEEDS_HUMAN_CONFIRM:
+            self.negotiation_result = "needs_human_confirm"
+            self.gateway_decline_reason = decision.outcome.value
+        else:
+            self.negotiation_result = "gateway_declined"
+            self.gateway_decline_reason = decision.outcome.value
             
     def run_negotiation(self):
         """Run the negotiation between buyer and seller."""
@@ -376,6 +425,13 @@ class Conversation:
                 "max_turns": self.max_turns
             },
             "scenario": self.scenario.to_dict() if self.scenario is not None else None,
+            "payment_gateway": self.gateway.to_dict() if self.gateway is not None else None,
+            "last_authorization": (
+                self.last_authorization.to_dict()
+                if self.last_authorization is not None
+                else None
+            ),
+            "gateway_decline_reason": self.gateway_decline_reason,
         }
         
         # Save to file

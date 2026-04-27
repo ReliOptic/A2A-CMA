@@ -84,6 +84,26 @@ class PostDataProcessor:
                 anomalies["offer_over_first"] = bool(last_offer > first_price)
                 anomalies["deadlock"] = data.get("negotiation_result") == "max_turns_reached"
 
+        # v1.5 gateway-intervention signals. Defensive about missing keys so
+        # baseline episodes (no scenario, no gateway) keep their existing
+        # anomaly shape.
+        gateway_outcomes = {"gateway_declined", "needs_human_confirm"}
+        intervention = data.get("negotiation_result") in gateway_outcomes
+        anomalies["gateway_intervention_required"] = bool(intervention)
+
+        scenario = data.get("scenario")
+        offers = data.get("seller_price_offers") or []
+        try:
+            hard_cap = scenario["spend_authorization"]["hard_cap"] if scenario else None
+        except (KeyError, TypeError):
+            hard_cap = None
+        anomalies["gateway_blocked_overpayment"] = bool(
+            intervention
+            and hard_cap is not None
+            and offers
+            and offers[-1] > hard_cap
+        )
+
         return anomalies
 
     def process_file(self, file_path: str) -> bool:
