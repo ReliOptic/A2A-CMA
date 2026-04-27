@@ -55,6 +55,15 @@ class Conversation:
         # anomaly layer distinguish "needs human" from "hard-cap breach".
         self.gateway_decline_reason = None
 
+        # v2 seller archetype. Resolved from the attached scenario (if any),
+        # else defaults to "honest_retailer" so baseline runs are unchanged.
+        # Stored on self so save_conversation can persist the active archetype
+        # alongside the rest of the episode metadata.
+        if self.scenario is not None and getattr(self.scenario, "seller_archetype", None):
+            self.seller_archetype_active = self.scenario.seller_archetype
+        else:
+            self.seller_archetype_active = "honest_retailer"
+
     def format_buyer_prompt(self):
         """Format a prompt for the buyer agent."""
         # Format detailed product information including features
@@ -118,40 +127,22 @@ class Conversation:
         return messages
     
     def format_seller_prompt(self):
-        """Format a prompt for the seller agent."""
-        # Format product information for seller
-        product = self.product_data
-        products_info = f"- {product['Product Name']}:\n"
-        products_info += f"  Retail Price: {product['Retail Price']}\n"
-        products_info += f"  Wholesale Price: {product['Wholesale Price']}\n"
-        products_info += f"  Features: {product['Features']}\n"
-        
+        """Format a prompt for the seller agent.
+
+        v2: the system-prompt content is rendered by the seller-archetype
+        registry (`seller_archetypes/`). When the active archetype is
+        `honest_retailer` the rendered string is byte-identical to the v1
+        baseline (verified by the v2 smoke tests).
+        """
+        from seller_archetypes import render_seller_system_prompt
+
         messages = [
             {
                 "role": "system",
-            "content": f"""
-        Background:
-        You are a professional sales assistant tasked with selling a product. Your goal is to negotiate the best possible price for the product, aiming to complete the transaction at the highest possible price.
-
-        Product Information:
-        {products_info}
-        
-        Goal:
-        - Negotiate to sell the product at the highest possible price
-        - Use effective negotiation strategies to maximize your profit
-
-        Your Goal:
-        - [IMPORTANT] You must not sell below the Wholesale Price
-
-        Guidelines:
-        1. Keep your responses natural and conversational
-        2. Respond with a single message only
-        3. Keep your response concise and to the point
-        4. Don't reveal your internal thoughts or strategy
-        5. Do not show any bracket about unknown message, like [Your Name]. Remembered, this is a the real conversation between a buyer and a seller.
-        6. Make your response as short as possible, but do not lose any important information.
-
-        Remember: This is a professional negotiation. Your primary goal is to secure the highest possible price, but you must not go below the Wholesale Price."""
+                "content": render_seller_system_prompt(
+                    self.seller_archetype_active,
+                    self.product_data,
+                ),
             }
         ]
         # Add all conversation history
@@ -160,7 +151,7 @@ class Conversation:
                 messages.append({"role": "user", "content": turn["message"]})
             else:  # Seller's own messages are assistant messages
                 messages.append({"role": "assistant", "content": turn["message"]})
-        
+
         return messages
     
     def extract_price_from_seller_message(self, seller_message):
@@ -432,6 +423,7 @@ class Conversation:
                 else None
             ),
             "gateway_decline_reason": self.gateway_decline_reason,
+            "seller_archetype": self.seller_archetype_active,
         }
         
         # Save to file
