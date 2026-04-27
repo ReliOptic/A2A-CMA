@@ -260,6 +260,18 @@ class PostDataProcessor:
             and last_offer_val > ceiling
         )
 
+        # ------------------------------------------------------------------
+        # v2.5 counterfactual user-regret. Sourced from an oracle judge
+        # (see `evaluation/regret.py`) that is run separately and whose
+        # verdict is attached via `attach_regret_verdict` BEFORE this
+        # function is called. Defaulting to False keeps backward-compat:
+        # episodes without an attached verdict look identical in shape to
+        # the v2 payload aside from the new key.
+        # ------------------------------------------------------------------
+        anomalies["regret_flagged"] = bool(
+            data.get("regret_verdict") == "WOULD_REGRET"
+        )
+
         return anomalies
 
     def process_file(self, file_path: str) -> bool:
@@ -600,6 +612,39 @@ def main():
     processor = PostDataProcessor()
     processor.process_all_files()
     print("Anomaly detection completed.")
+
+def attach_regret_verdict(data: Dict[str, Any], verdict: Optional[Any]) -> Dict[str, Any]:
+    """Attach a v2.5 oracle-judge verdict to an episode payload in place.
+
+    Sets ``data["regret_verdict"]`` to the string verdict name (e.g.
+    ``"WOULD_REGRET"``) and ``data["regret_reason"]`` to the judge's
+    rationale. When ``verdict`` is ``None`` both fields are set to
+    ``None`` so a downstream pipeline can still serialise the record
+    consistently.
+
+    Lazy-imports :mod:`evaluation` only for the type annotation reference
+    so this module does not introduce a hard dependency on the new
+    package (avoids any chance of a circular import at module load).
+    """
+    if verdict is None:
+        data["regret_verdict"] = None
+        data["regret_reason"] = None
+        return data
+    # Lazy import: only touched if a non-None verdict is passed in. Tests
+    # that exercise the no-verdict path therefore never need the
+    # `evaluation` package to be importable.
+    from evaluation import RegretRationale  # noqa: WPS433
+    if isinstance(verdict, RegretRationale):
+        data["regret_verdict"] = verdict.verdict.name
+        data["regret_reason"] = verdict.reason
+    else:
+        # Best-effort duck-typed fallback: anything with a `.verdict.name`
+        # and `.reason` is accepted so future judge variants slot in.
+        v_obj = getattr(verdict, "verdict", None)
+        data["regret_verdict"] = getattr(v_obj, "name", None)
+        data["regret_reason"] = getattr(verdict, "reason", None)
+    return data
+
 
 if __name__ == "__main__":
     main() 
